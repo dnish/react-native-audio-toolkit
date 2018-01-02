@@ -4,7 +4,8 @@ import {
   NativeModules,
   DeviceEventEmitter,
   NativeAppEventEmitter,
-  Platform
+  Platform, 
+  Alert
 } from 'react-native';
 
 import _ from 'lodash';
@@ -28,7 +29,7 @@ var defaultPlayerOptions = {
 class Player extends EventEmitter {
   constructor(path, options = defaultPlayerOptions) {
     super();
-
+    this._onTimeUpdate = "";
     this._path = path;
     this._options = options;
 
@@ -46,18 +47,21 @@ class Player extends EventEmitter {
     this._state = MediaStates.IDLE;
     this._volume = 1.0;
     this._pan = 0.0;
-    this._wakeLock = false;
+    this._wakeLock = true; //false;
     this._duration = -1;
     this._position = -1;
     this._lastSync = -1;
     this._looping = false;
+
+    
   }
 
   _storeInfo(info) {
+    
     if (!info) {
       return;
     }
-
+    
     this._duration = info.duration;
     this._position = info.position;
     this._lastSync = Date.now();
@@ -78,6 +82,13 @@ class Player extends EventEmitter {
   _handleEvent(event, data) {
     //console.log('event: ' + event + ', data: ' + JSON.stringify(data));
     switch (event) {
+      case 'timeupdateevent':
+            if (this._state === MediaStates.PLAYING) {
+              if(this._onTimeUpdate) {
+                this._onTimeUpdate(Math.round(data.currentTime));
+              }
+            }
+            break;
       case 'progress':
         // TODO
         break;
@@ -114,9 +125,15 @@ class Player extends EventEmitter {
     let tasks = [];
 
     // Prepare player
+    
     tasks.push((next) => {
       RCTAudioPlayer.prepare(this._playerId, this._path, this._options, next);
+      if(this._onTimeUpdate) {
+        RCTAudioPlayer.onTimeUpdate(this._playerId);
+      }
     });
+
+    
 
     // Set initial values for player options
     tasks.push((next) => {
@@ -137,6 +154,7 @@ class Player extends EventEmitter {
   }
 
   play(callback = _.noop) {
+    
     let tasks = [];
 
     // Make sure player is prepared
@@ -146,9 +164,12 @@ class Player extends EventEmitter {
       });
     }
 
+    
+
     // Start playback
     tasks.push((next) => {
       RCTAudioPlayer.play(this._playerId, next);
+      
     });
 
     async.series(tasks, (err, results) => {
@@ -220,6 +241,37 @@ class Player extends EventEmitter {
       RCTAudioPlayer.set(this._playerId, options, callback);
     }
   }
+
+
+  /* For onTimeUpdate */
+
+  getBackgroundPermission() {
+    RCTAudioPlayer.getBackgroundPermission();
+  }
+
+  
+
+  onTimeUpdate(callback = _.noop) {
+    let tasks = [];
+    if(callback) {
+      if(this._onTimeUpdate) {
+        this._onTimeUpdate = callback;
+        return;
+      }
+      this._onTimeUpdate = callback;
+    }
+    if(this._state === MediaStates.IDLE) {
+      
+    }
+    else {
+      RCTAudioPlayer.onTimeUpdate(this._playerId);
+    }
+    return;
+    
+  }
+
+  /* For onTimeUpdate End */
+
 
   set volume(value) {
     this._volume = value;

@@ -32,9 +32,30 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import  java.util.Timer;
+import  java.util.TimerTask;
+import android.os.Handler;
+import android.content.Intent;
+import android.provider.Settings;
+import android.widget.Toast;
+import android.app.Activity;
+import android.content.ServiceConnection;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.content.ComponentName;
+
+import com.futurice.rctaudiotoolkit.AudioPlayerService;
+import com.futurice.rctaudiotoolkit.AudioPlayerService.LocalBinder;
+
+
+
 public class AudioPlayerModule extends ReactContextBaseJavaModule implements MediaPlayer.OnInfoListener,
         MediaPlayer.OnErrorListener, MediaPlayer.OnCompletionListener, MediaPlayer.OnSeekCompleteListener,
         MediaPlayer.OnBufferingUpdateListener, LifecycleEventListener, AudioManager.OnAudioFocusChangeListener {
+    
+    boolean mBounded = false;
+    AudioPlayerService mAudioPlayerService;
+
     private static final String LOG_TAG = "AudioPlayerModule";
 
     Map<Integer, MediaPlayer> playerPool = new HashMap<>();
@@ -44,15 +65,79 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
 
     boolean looping = false;
     private ReactApplicationContext context;
+    private Context tmpContext;
     private AudioManager mAudioManager;
     private Integer lastPlayerId;
-
     public AudioPlayerModule(ReactApplicationContext reactContext) {
         super(reactContext);
         this.context = reactContext;
         reactContext.addLifecycleEventListener(this);
         this.mAudioManager = (AudioManager) this.context.getSystemService(Context.AUDIO_SERVICE);
+        //this.tmpContext = AudioPlayerModule.this;
     }
+
+    ServiceConnection mConnection = new ServiceConnection() {
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            mBounded = false;
+            mAudioPlayerService = null;
+        }
+
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            //Toast.makeText(Client.this, "Service is connected", 1000).show();
+            mBounded = true;
+            LocalBinder mLocalBinder = (LocalBinder)service;
+            mAudioPlayerService = mLocalBinder.getServerInstance();
+        }
+    };
+
+    @ReactMethod
+    String getActivityName() {
+        Activity activity = getCurrentActivity();
+        if (activity != null) {
+            return activity.getClass().getSimpleName();
+        }
+        return "No";
+    }
+
+    @ReactMethod
+    void getBackgroundPermission() {
+        Activity activity = getCurrentActivity();
+        if (activity != null) {
+            Toast.makeText(getReactApplicationContext(), getActivityName(), Toast.LENGTH_SHORT).show();
+            Intent pIntent = new Intent();
+            String packageName = getReactApplicationContext().getPackageName(); //this.context.getPackageName();
+            pIntent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            //pIntent.setAction(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+            pIntent.setData(Uri.parse("package:" + packageName));
+            //myIntent.setAction(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+            activity.startActivity(pIntent);
+        }
+        
+    }
+
+    @ReactMethod
+    public void onTimeUpdate(final Integer playerId) {
+        final MediaPlayer player = this.playerPool.get(playerId);
+        final int amoungToupdate = 1000;
+        Timer mTimer = new Timer();
+        mTimer.schedule(
+            new TimerTask() {
+            @Override
+            public void run() {
+                if(player != null  && player.isPlaying()) {
+
+                    WritableMap info = new WritableNativeMap();
+                    info.putDouble("currentTime", player.getCurrentPosition());
+                     emitEvent(playerId, "timeupdateevent", info);
+                }
+            };
+        },
+        1000, 1000);
+    }
+
+  
 
     @Override
     public void onHostResume() {
@@ -82,6 +167,22 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
     @Override
     public void onHostDestroy() {
         // Activity `onDestroy`
+
+        for (Map.Entry<Integer, MediaPlayer> entry : this.playerPool.entrySet()) {
+            Integer playerId = entry.getKey();
+            MediaPlayer player = entry.getValue();
+            player.pause();
+            player.release();
+        }
+        
+
+        Context ct = getReactApplicationContext();
+        if(this.mBounded) {
+            ct.unbindService(this.mConnection);
+            this.mBounded = false;
+
+            ct.stopService(new Intent(ct, AudioPlayerService.class));
+        }
     }
 
     @Override
@@ -226,74 +327,96 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
 
     @ReactMethod
     public void prepare(Integer playerId, String path, ReadableMap options, final Callback callback) {
-        if (path == null || path.isEmpty()) {
-            callback.invoke(errObj("nopath", "Provided path was empty"));
-            return;
-        }
+        if(true) {
+            if(!this.mBounded) {
+                Context ct = getReactApplicationContext();
+                Intent startIntent = new Intent(ct, AudioPlayerService.class);
+                startIntent.addFlags(Intent.FLAG_FROM_BACKGROUND);
+                startIntent.setAction("PLAY");
+                ct.startService(startIntent);
 
-        // Release old player if exists
-        destroy(playerId);
-        this.lastPlayerId = playerId;
+                Intent mIntent = new Intent(ct, AudioPlayerService.class);
+                ct.bindService(mIntent, this.mConnection, ct.BIND_IMPORTANT);
+                //Toast.makeText(getReactApplicationContext(), "123", Toast.LENGTH_SHORT).show();
+            }
+            else {
+                
+            }
+            
+            if (path == null || path.isEmpty()) {
+                callback.invoke(errObj("nopath", "Provided path was empty"));
 
-        Uri uri = uriFromPath(path);
+                return;
+            }
+            
+            // Release old player if exists
+            destroy(playerId);
+            this.lastPlayerId = playerId;
 
-        //MediaPlayer player = MediaPlayer.create(this.context, uri, null, attributes);
-        MediaPlayer player = new MediaPlayer();
+            Uri uri = uriFromPath(path);
 
-        /*
-        AudioAttributes attributes = new AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_UNKNOWN)
-            .setContentType(AudioAttributes.CONTENT_TYPE_UNKNOWN)
-            .build();
+            //MediaPlayer player = MediaPlayer.create(this.context, uri, null, attributes);
+            MediaPlayer player = AudioPlayerService.createMediaPlayer();
+            //mAudioPlayerService.createMediaPlayer();
 
-        player.setAudioAttributes(attributes);
-        */
+            /*
+            AudioAttributes attributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_UNKNOWN)
+                .setContentType(AudioAttributes.CONTENT_TYPE_UNKNOWN)
+                .build();
 
-        try {
-            Log.d(LOG_TAG, uri.getPath());
-            player.setDataSource(this.context, uri);
-        } catch (IOException e) {
-            callback.invoke(errObj("invalidpath", e.toString()));
-            return;
-        }
+            player.setAudioAttributes(attributes);
+            */
 
-        player.setOnErrorListener(this);
-        player.setOnInfoListener(this);
-        player.setOnCompletionListener(this);
-        player.setOnSeekCompleteListener(this);
-        player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() { // Async preparing, so we need to run the callback after preparing has finished
-
-            @Override
-            public void onPrepared(MediaPlayer player) {
-                callback.invoke(null, getInfo(player));
+            try {
+                Log.d(LOG_TAG, uri.getPath());
+                player.setDataSource(this.context, uri);
+            } catch (IOException e) {
+                callback.invoke(errObj("invalidpath", e.toString()));
+                return;
             }
 
-        });
+            player.setOnErrorListener(this);
+            player.setOnInfoListener(this);
+            player.setOnCompletionListener(this);
+            player.setOnSeekCompleteListener(this);
+            player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() { // Async preparing, so we need to run the callback after preparing has finished
 
-        this.playerPool.put(playerId, player);
+                @Override
+                public void onPrepared(MediaPlayer player) {
+                    callback.invoke(null, getInfo(player));
+                }
 
-        // Auto destroy player by default
-        boolean autoDestroy = true;
+            });
 
-        if (options.hasKey("autoDestroy")) {
-            autoDestroy = options.getBoolean("autoDestroy");
+            this.playerPool.put(playerId, player);
+
+            // Auto destroy player by default
+            boolean autoDestroy = true;
+
+            if (options.hasKey("autoDestroy")) {
+                autoDestroy = options.getBoolean("autoDestroy");
+            }
+
+            // Don't continue in background by default
+            boolean continueInBackground = false;
+
+            if (options.hasKey("continuesToPlayInBackground")) {
+                continueInBackground = options.getBoolean("continuesToPlayInBackground");
+            }
+
+            this.playerAutoDestroy.put(playerId, autoDestroy);
+            this.playerContinueInBackground.put(playerId, continueInBackground);
+
+            try {
+                player.prepareAsync();
+            } catch (Exception e) {
+                callback.invoke(errObj("prepare", e.toString()));
+            }
+
+            //return;
         }
-
-        // Don't continue in background by default
-        boolean continueInBackground = false;
-
-        if (options.hasKey("continuesToPlayInBackground")) {
-            continueInBackground = options.getBoolean("continuesToPlayInBackground");
-        }
-
-        this.playerAutoDestroy.put(playerId, autoDestroy);
-        this.playerContinueInBackground.put(playerId, continueInBackground);
-
-        try {
-            player.prepareAsync();
-        } catch (Exception e) {
-            callback.invoke(errObj("prepare", e.toString()));
-        }
+        
     }
 
     @ReactMethod
@@ -357,7 +480,6 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
         try {
             this.mAudioManager.requestAudioFocus(this, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
             player.start();
-
             callback.invoke(null, getInfo(player));
         } catch (Exception e) {
             callback.invoke(errObj("playback", e.toString()));

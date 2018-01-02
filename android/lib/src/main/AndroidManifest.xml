@@ -3,11 +3,18 @@
     android:versionCode="1"
     android:versionName="1.0">
 
+    <application>
+        <service android:enabled="true" android:exported="false" android:name="com.futurice.rctaudiotoolkit.AudioPlayerService" />
+    </application>
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <uses-sdk
         android:minSdkVersion="16"
